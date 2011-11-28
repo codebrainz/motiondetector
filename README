@@ -16,11 +16,10 @@ somewhat.
 
 Here's a sample pipeline:
 
-  $ gst-launch -v --gst-plugin-path=/path/to/where/the/plugin/is \
-		v4l2src ! \
-		video/x-raw-rgb,width=320,height=240 ! \
-		motiondetector \
-			draw_motion=true \
-			rate_limit=1000 ! \
-		queue ! \
-		ximagesink
+	$ gst-launch -v --gst-plugin-path=$PLUGIN_PATH \
+          autovideosrc ! \
+          video/x-raw-rgb ! \
+          motiondetector draw_motion=true rate_limit=500 ! \
+          ffmpegcolorspace ! \
+          queue ! \
+          autovideosink
