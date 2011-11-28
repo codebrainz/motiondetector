@@ -1,0 +1,26 @@
+GStreamer Motion Detector Plugin
+================================
+
+This is a simple GStreamer plugin that detects motion in a video
+stream in a Gstreamer pipeline.  The element has one sink pad and
+one source pad, both only support 24-bit RGB formats.
+
+Connect the element inline with your video stream and either watch
+the elements `notify::motion-detected` signal or watch for application
+bus messages containing motion information.
+
+The plugin uses OpenCV to find moving blobs against an averaged
+background scene.  It's not super-robust but it's still quite
+accurate.  You can tweak the element properties to improve detection
+somewhat.
+
+Here's a sample pipeline:
+
+  $ gst-launch -v --gst-plugin-path=/path/to/where/the/plugin/is \
+		v4l2src ! \
+		video/x-raw-rgb,width=320,height=240 ! \
+		motiondetector \
+			draw_motion=true \
+			rate_limit=1000 ! \
+		queue ! \
+		ximagesink
