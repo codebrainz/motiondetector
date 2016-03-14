@@ -38,8 +38,11 @@ struct _GstMotionDetector
   guint num_blobs;
   guint rate_limit;
   gboolean rate_inhibit;
+  guint width;
+  guint height;
 
   IplImage *run_avg;
+  IplImage *currentImage;
 };
 
 struct _GstMotionDetectorClass

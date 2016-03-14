@@ -78,8 +78,7 @@ static void gst_motion_detector_finalize (GObject *obj);
 static gboolean gst_motion_detector_set_caps (GstPad * pad, GstCaps * caps);
 static GstFlowReturn gst_motion_detector_chain (GstPad * pad, GstBuffer * buf);
 
-static gboolean gst_motion_detector_get_frame_size (GstBuffer *buf, gint *width, gint *height);
-static IplImage* gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, gint width, gint height);
+static IplImage* gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, GstMotionDetector *filter);
 static GstBuffer *gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img);
 static IplImage *gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src);
 
@@ -305,10 +304,20 @@ gst_motion_detector_set_caps (GstPad * pad, GstCaps * caps)
 {
   GstMotionDetector *filter;
   GstPad *otherpad;
+  gint width, height;
+  GstStructure *structure;
 
   filter = GST_MOTION_DETECTOR (gst_pad_get_parent (pad));
   otherpad = (pad == filter->srcpad) ? filter->sinkpad : filter->srcpad;
   gst_object_unref (filter);
+
+  structure = gst_caps_get_structure (caps, 0);
+  gst_structure_get_int (structure, "width", &width);
+  gst_structure_get_int (structure, "height", &height);
+
+  filter->width=width;
+  filter->height=height;
+  filter->currentImage = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
 
   return gst_pad_set_caps (otherpad, caps);
 }
@@ -325,18 +334,13 @@ gst_motion_detector_rate_timeout (GstMotionDetector *filter)
 static GstFlowReturn
 gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
 {
-  GstMotionDetector *filter;
-  IplImage *img;
+  GstMotionDetector *filter = GST_MOTION_DETECTOR (GST_OBJECT_PARENT (pad));
 
-  filter = GST_MOTION_DETECTOR (GST_OBJECT_PARENT (pad));
-
-  img = gst_motion_detector_gst_buffer_to_ipl_image (buf, -1, -1);
-  img = gst_motion_detector_process_image (filter, img);
+  filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);
+  filter->currentImage = gst_motion_detector_process_image (filter, filter->currentImage);
 
   if (filter->draw_motion)
-    gst_motion_detector_buffer_set_from_ipl_image (buf, img);
-
-  cvReleaseImage (&img);
+    gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
 
   if (!filter->rate_inhibit)
     {
@@ -344,46 +348,39 @@ gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
       GstMessage *msg;
 
       bus = gst_element_get_bus (GST_ELEMENT (filter));
-
-      if (filter->num_blobs > 0)
-	{
-	  if (!filter->motion_detected)
-	    {
-	      filter->motion_detected = TRUE;
-	      g_object_notify (G_OBJECT (filter), "motion-detected");
-		if (filter->post_messages)
-		{
-		  msg = gst_message_new_application (GST_OBJECT (filter),
-		      gst_structure_new ("motion-data",
-			"motion-detected", G_TYPE_BOOLEAN, TRUE,
-			"num-blobs", G_TYPE_UINT, filter->num_blobs, NULL));
-		  gst_bus_post (bus, msg);
-		}
-	    }
-	}
-      else
-	{
-	    if (filter->motion_detected)
-	    {
-	      filter->motion_detected = FALSE;
-	      g_object_notify (G_OBJECT (filter), "motion-detected");
-	      if (filter->post_messages)
-		{
-		  msg = gst_message_new_application (GST_OBJECT (filter),
-		      gst_structure_new ("motion-data",
-			"motion-detected", G_TYPE_BOOLEAN, FALSE,
-			"num-blobs", G_TYPE_UINT, 0, NULL));
-		  gst_bus_post (bus, msg);
-		}
-	    }
-	}
+      if ((filter->num_blobs > 0) && (!filter->motion_detected))
+      {
+        filter->motion_detected = TRUE;
+        g_object_notify (G_OBJECT (filter), "motion-detected");
+        if (filter->post_messages)
+        {
+          msg = gst_message_new_application (GST_OBJECT (filter),
+            gst_structure_new ("motion-data",
+            "motion-detected", G_TYPE_BOOLEAN, TRUE,
+            "num-blobs", G_TYPE_UINT, filter->num_blobs, NULL));
+          gst_bus_post (bus, msg);
+        }
+      }
+      else if (filter->motion_detected)
+      {
+        filter->motion_detected = FALSE;
+        g_object_notify (G_OBJECT (filter), "motion-detected");
+        if (filter->post_messages)
+        {
+          msg = gst_message_new_application (GST_OBJECT (filter),
+            gst_structure_new ("motion-data",
+              "motion-detected", G_TYPE_BOOLEAN, FALSE,
+              "num-blobs", G_TYPE_UINT, 0, NULL));
+          gst_bus_post (bus, msg);
+        }
+      }
 
       if (filter->rate_limit > 0)
-	{
-	  filter->rate_inhibit = TRUE;
-	  g_timeout_add (filter->rate_limit,
-	    (GSourceFunc) gst_motion_detector_rate_timeout, filter);
-	}
+      {
+        filter->rate_inhibit = TRUE;
+        g_timeout_add (filter->rate_limit,
+          (GSourceFunc) gst_motion_detector_rate_timeout, filter);
+      }
 
       gst_object_unref (bus);
     }
@@ -392,60 +389,16 @@ gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
 }
 
 
-static gboolean gst_motion_detector_get_frame_size (GstBuffer *buf, gint *width, gint *height)
-{
-  const GstStructure *str;
-  gint w = 0, h = 0;
-
-  if (!gst_caps_is_fixed (buf->caps))
-    return FALSE;
-
-  str = gst_caps_get_structure (buf->caps, 0);
-
-  if (!gst_structure_get_int (str, "width", &w) ||
-      !gst_structure_get_int (str, "height", &h))
-    {
-      return FALSE;
-    }
-
-  if (width)
-    *width = w;
-
-  if (height)
-    *height = h;
-
-  return TRUE;
-}
-
-
 static IplImage*
-gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, gint width, gint height)
+gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, GstMotionDetector *filter)
 {
   IplImage *orig, *img;
-  gint w = -1, h = -1, y, x;
-  guint8 r, g, b;
-  guchar *ptr;
+  orig = cvCreateImage (cvSize (filter->width, filter->height), IPL_DEPTH_8U, 3);
+  orig->imageData = (char *) GST_BUFFER_DATA (buf);
 
-  if (!gst_motion_detector_get_frame_size (buf, &w, &h))
-    return NULL;
-
-  orig = cvCreateImage (cvSize (w, h), IPL_DEPTH_8U, 3);
-  ptr = buf->data;
-
-  for (y = 0; y < h; y++)
+  if (filter->width > 0 && filter->height > 0)
     {
-      for (x = 0; x < w; x++)
-	{
-	  r = *ptr++;
-	  g = *ptr++;
-	  b = *ptr++;
-	  cvSet2D (orig, y, x, cvScalar (b, g, r, 0));
-	}
-    }
-
-  if (width > 0 && height > 0)
-    {
-      img = cvCreateImage (cvSize (width, height), IPL_DEPTH_8U, 3);
+      img = cvCreateImage (cvSize (filter->width, filter->height), IPL_DEPTH_8U, 3);
       cvResize (orig, img, CV_INTER_LINEAR);
       cvReleaseImage (&orig);
       orig = img;
@@ -458,33 +411,7 @@ gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, gint width, gint he
 static GstBuffer *
 gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img)
 {
-  gint y, x;
-  CvScalar pixel;
-  guchar *ptr;
-  IplImage *dst;
-  ptr = buf->data;
-  gint w, h;
-
-  if (!gst_motion_detector_get_frame_size (buf, &w, &h))
-    return NULL;
-
-  dst = cvCreateImage (cvSize (w, h), IPL_DEPTH_8U, 3);
-
-  cvResize (img, dst, CV_INTER_LINEAR);
-
-  for (y = 0; y < dst->height; y++)
-    {
-      for (x = 0; x < dst->width; x++)
-	{
-	  pixel = cvGet2D (dst, y, x);
-	  *ptr++ = pixel.val[2];
-	  *ptr++ = pixel.val[1];
-	  *ptr++ = pixel.val[0];
-	}
-    }
-
-  cvReleaseImage (&dst);
-
+  gst_buffer_set_data(buf, (guint8 *)img->imageData, img->imageSize);
   return buf;
 }
 
@@ -523,26 +450,36 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
     CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, cvPoint (0, 0));
 
   for (; contour != NULL; contour = contour->h_next)
+  {
+    bind_rect = cvBoundingRect (contour, 0);
+
+    if (bind_rect.width < filter->min_blob_size ||
+      bind_rect.height < filter->min_blob_size)
     {
-      bind_rect = cvBoundingRect (contour, 0);
-
-      if (bind_rect.width < filter->min_blob_size ||
-	  bind_rect.height < filter->min_blob_size)
-	{
-	  continue;
-	}
-
-      num_blobs++;
-
-      if (filter->draw_motion)
-	{
-	  cvRectangle (src, cvPoint (bind_rect.x, bind_rect.y),
-		  cvPoint (bind_rect.x + bind_rect.width,
-			  bind_rect.y + bind_rect.height),
-		  CV_RGB (255, 0, 0), 1, 8, 0);
-	}
+      continue;
     }
+    num_blobs++;
 
+    if (filter->post_messages)
+    {
+      GstStructure *s = gst_structure_new ("motion",
+        "x", G_TYPE_UINT, bind_rect.x,
+        "y", G_TYPE_UINT, bind_rect.y,
+        "width", G_TYPE_UINT, bind_rect.width,
+        "height", G_TYPE_UINT, bind_rect.height, NULL);
+
+      GstMessage *m = gst_message_new_element (GST_OBJECT (filter), s);
+      gst_element_post_message (GST_ELEMENT (filter), m);
+    }
+    if (filter->draw_motion)
+    {
+      cvRectangle (src, cvPoint (bind_rect.x, bind_rect.y),
+        cvPoint (bind_rect.x + bind_rect.width,
+          bind_rect.y + bind_rect.height),
+        CV_RGB (255, 0, 0), 1, 8, 0);
+    }
+  }
+  cvReleaseMemStorage(&store);
   cvReleaseImage (&tmp);
   cvReleaseImage (&diff);
   cvReleaseImage (&gr);
