@@ -25,6 +25,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_motion_detector_debug);
 #define DEFAULT_DILATE_ITERATIONS 18
 #define DEFAULT_ERODE_ITERATIONS  10
 #define DEFAULT_MIN_BLOB_SIZE     10
+#define DEFAULT_MAX_BLOB_SIZE     255
 #define DEFAULT_NUM_BLOBS         0
 #define DEFAULT_RATE_LIMIT        500
 
@@ -46,6 +47,7 @@ enum
   PROP_DILATE_ITERATIONS,
   PROP_ERODE_ITERATIONS,
   PROP_MINIMUM_BLOB_SIZE,
+  PROP_MAXIMUM_BLOB_SIZE,
   PROP_NUM_BLOBS,
   PROP_RATE_LIMIT
 };
@@ -78,7 +80,6 @@ static void gst_motion_detector_finalize (GObject *obj);
 static gboolean gst_motion_detector_set_caps (GstPad * pad, GstCaps * caps);
 static GstFlowReturn gst_motion_detector_chain (GstPad * pad, GstBuffer * buf);
 
-static IplImage* gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, GstMotionDetector *filter);
 static GstBuffer *gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img);
 static IplImage *gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src);
 
@@ -152,6 +153,11 @@ gst_motion_detector_class_init (GstMotionDetectorClass * klass)
       "Minimum height or width of blob to be considered",
       0, 255, DEFAULT_MIN_BLOB_SIZE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
 
+  g_object_class_install_property (gobject_class, PROP_MAXIMUM_BLOB_SIZE,
+    g_param_spec_uint ("maximum-blob-size", "MaximumBlobSize",
+      "Maximum height or width of blob to be considered",
+      0, 255, DEFAULT_MAX_BLOB_SIZE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+
   g_object_class_install_property (gobject_class, PROP_NUM_BLOBS,
     g_param_spec_uint ("num-blobs", "NumBlobs",
       "Number of blobs in the frame", 0, 255, DEFAULT_NUM_BLOBS,
@@ -190,6 +196,7 @@ gst_motion_detector_init (GstMotionDetector * filter, GstMotionDetectorClass * g
   filter->dilate_iterations = DEFAULT_DILATE_ITERATIONS;
   filter->erode_iterations = DEFAULT_ERODE_ITERATIONS;
   filter->min_blob_size = DEFAULT_MIN_BLOB_SIZE;
+  filter->max_blob_size = DEFAULT_MAX_BLOB_SIZE;
   filter->num_blobs = DEFAULT_NUM_BLOBS;
   filter->rate_limit = DEFAULT_RATE_LIMIT;
   filter->rate_inhibit = FALSE;
@@ -244,6 +251,9 @@ gst_motion_detector_set_property (GObject * object, guint prop_id,
     case PROP_MINIMUM_BLOB_SIZE:
       filter->min_blob_size = g_value_get_uint (value);
       break;
+    case PROP_MAXIMUM_BLOB_SIZE:
+      filter->max_blob_size = g_value_get_uint (value);
+      break;
     case PROP_RATE_LIMIT:
       filter->rate_limit = g_value_get_uint (value);
       break;
@@ -285,6 +295,9 @@ gst_motion_detector_get_property (GObject * object, guint prop_id,
       break;
     case PROP_MINIMUM_BLOB_SIZE:
       g_value_set_uint (value, filter->min_blob_size);
+      break;
+    case PROP_MAXIMUM_BLOB_SIZE:
+      g_value_set_uint (value, filter->max_blob_size);
       break;
     case PROP_NUM_BLOBS:
       g_value_set_uint (value, filter->num_blobs);
@@ -336,7 +349,9 @@ gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
 {
   GstMotionDetector *filter = GST_MOTION_DETECTOR (GST_OBJECT_PARENT (pad));
 
-  filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);
+  /*filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);*/
+  filter->currentImage->imageData = (char *) GST_BUFFER_DATA (buf);
+
   filter->currentImage = gst_motion_detector_process_image (filter, filter->currentImage);
 
   if (filter->draw_motion)
@@ -389,25 +404,6 @@ gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
 }
 
 
-static IplImage*
-gst_motion_detector_gst_buffer_to_ipl_image (GstBuffer *buf, GstMotionDetector *filter)
-{
-  IplImage *orig, *img;
-  orig = cvCreateImage (cvSize (filter->width, filter->height), IPL_DEPTH_8U, 3);
-  orig->imageData = (char *) GST_BUFFER_DATA (buf);
-
-  if (filter->width > 0 && filter->height > 0)
-    {
-      img = cvCreateImage (cvSize (filter->width, filter->height), IPL_DEPTH_8U, 3);
-      cvResize (orig, img, CV_INTER_LINEAR);
-      cvReleaseImage (&orig);
-      orig = img;
-    }
-
-  return orig;
-}
-
-
 static GstBuffer *
 gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img)
 {
@@ -454,7 +450,9 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
     bind_rect = cvBoundingRect (contour, 0);
 
     if (bind_rect.width < filter->min_blob_size ||
-      bind_rect.height < filter->min_blob_size)
+      bind_rect.height < filter->min_blob_size ||
+      bind_rect.width > filter->max_blob_size ||
+      bind_rect.height > filter->max_blob_size)
     {
       continue;
     }

@@ -35,6 +35,7 @@ struct _GstMotionDetector
   guint dilate_iterations;
   guint erode_iterations;
   guint min_blob_size;
+  guint max_blob_size;
   guint num_blobs;
   guint rate_limit;
   gboolean rate_inhibit;
