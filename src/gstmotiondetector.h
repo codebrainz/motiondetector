@@ -7,7 +7,7 @@
 #define PLUGIN_H__ 1
 
 #include <gst/gst.h>
-#include <cv.h>
+#include <opencv2/core/core_c.h>
 
 G_BEGIN_DECLS
 

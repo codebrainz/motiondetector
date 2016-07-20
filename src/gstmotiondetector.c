@@ -8,12 +8,12 @@
 #endif
 
 #include <gst/gst.h>
-#include <cv.h>
+#include <opencv2/imgproc/imgproc_c.h>
 
 #include "gstmotiondetector.h"
 
 
-GST_DEBUG_CATEGORY_STATIC (gst_motion_detector_debug);
+GST_DEBUG_CATEGORY (gst_motion_detector_debug);
 #define GST_CAT_DEFAULT gst_motion_detector_debug
 
 
@@ -67,8 +67,9 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     );
 
 
-GST_BOILERPLATE (GstMotionDetector, gst_motion_detector, GstElement,
-    GST_TYPE_ELEMENT);
+G_DEFINE_TYPE_WITH_CODE (GstMotionDetector, gst_motion_detector, GST_TYPE_ELEMENT,
+                         GST_DEBUG_CATEGORY_INIT(gst_motion_detector_debug, "gstmotiondetector", 0,
+                                                 "debug category for gstmotiondetector element"));
 
 
 static void gst_motion_detector_set_property (GObject * object, guint prop_id,
@@ -77,35 +78,28 @@ static void gst_motion_detector_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 static void gst_motion_detector_finalize (GObject *obj);
 
-static gboolean gst_motion_detector_set_caps (GstPad * pad, GstCaps * caps);
-static GstFlowReturn gst_motion_detector_chain (GstPad * pad, GstBuffer * buf);
+static GstFlowReturn gst_motion_detector_chain (GstPad *pad, GstObject *parent, GstBuffer *buf);
+static gboolean
+gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event);
 
-static GstBuffer *gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img);
 static IplImage *gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src);
-
-
-static void
-gst_motion_detector_base_init (gpointer gclass)
-{
-  GstElementClass *element_class = GST_ELEMENT_CLASS (gclass);
-
-  gst_element_class_set_details_simple(element_class,
-    "MotionDetector",
-    "Analyzer/Video",
-    "Detects motion in video streams",
-    "Matthew Brush <mbrush@codebrainz.ca>");
-
-  gst_element_class_add_pad_template (element_class,
-      gst_static_pad_template_get (&src_factory));
-  gst_element_class_add_pad_template (element_class,
-      gst_static_pad_template_get (&sink_factory));
-}
 
 
 static void
 gst_motion_detector_class_init (GstMotionDetectorClass * klass)
 {
   GObjectClass *gobject_class;
+  GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+
+  gst_element_class_set_static_metadata(GST_ELEMENT_CLASS(klass),
+                                          "MotionDetector", "Analyzer/Video", "Detects motion in video streams",
+                                          "Matthew Brush <mbrush@codebrainz.ca>, Alexey Gornostaev <kreopt@gmail.com>");
+
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&src_factory));
+  gst_element_class_add_pad_template (element_class,
+      gst_static_pad_template_get (&sink_factory));
+  
 
   gobject_class = (GObjectClass *) klass;
 
@@ -171,19 +165,15 @@ gst_motion_detector_class_init (GstMotionDetectorClass * klass)
 
 
 static void
-gst_motion_detector_init (GstMotionDetector * filter, GstMotionDetectorClass * gclass)
+gst_motion_detector_init (GstMotionDetector * filter)
 {
   filter->sinkpad = gst_pad_new_from_static_template (&sink_factory, "sink");
-  gst_pad_set_setcaps_function (filter->sinkpad,
-                                GST_DEBUG_FUNCPTR(gst_motion_detector_set_caps));
-  gst_pad_set_getcaps_function (filter->sinkpad,
-                                GST_DEBUG_FUNCPTR(gst_pad_proxy_getcaps));
   gst_pad_set_chain_function (filter->sinkpad,
                               GST_DEBUG_FUNCPTR(gst_motion_detector_chain));
+  gst_pad_set_event_function (filter->sinkpad, 
+                              GST_DEBUG_FUNCPTR(gst_motion_detector_event));
 
   filter->srcpad = gst_pad_new_from_static_template (&src_factory, "src");
-  gst_pad_set_getcaps_function (filter->srcpad,
-                                GST_DEBUG_FUNCPTR(gst_pad_proxy_getcaps));
 
   gst_element_add_pad (GST_ELEMENT (filter), filter->sinkpad);
   gst_element_add_pad (GST_ELEMENT (filter), filter->srcpad);
@@ -311,28 +301,44 @@ gst_motion_detector_get_property (GObject * object, guint prop_id,
     }
 }
 
-
 static gboolean
-gst_motion_detector_set_caps (GstPad * pad, GstCaps * caps)
+gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
 {
-  GstMotionDetector *filter;
-  GstPad *otherpad;
-  gint width, height;
-  GstStructure *structure;
+    gboolean ret = TRUE;
 
-  filter = GST_MOTION_DETECTOR (gst_pad_get_parent (pad));
-  otherpad = (pad == filter->srcpad) ? filter->sinkpad : filter->srcpad;
-  gst_object_unref (filter);
+    switch (GST_EVENT_TYPE (event)) {
+        case GST_EVENT_CAPS: {
 
-  structure = gst_caps_get_structure (caps, 0);
-  gst_structure_get_int (structure, "width", &width);
-  gst_structure_get_int (structure, "height", &height);
+            GstMotionDetector *filter;
+            GstPad *otherpad;
+            gint width, height;
+            GstStructure *structure;
+            GstCaps *caps;
 
-  filter->width=width;
-  filter->height=height;
-  filter->currentImage = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
+            gst_event_parse_caps (event, &caps);
 
-  return gst_pad_set_caps (otherpad, caps);
+            filter = GST_MOTION_DETECTOR (gst_pad_get_parent (pad));
+            otherpad = (pad == filter->srcpad) ? filter->sinkpad : filter->srcpad;
+            gst_object_unref (filter);
+
+            structure = gst_caps_get_structure (caps, 0);
+            gst_structure_get_int (structure, "width", &width);
+            gst_structure_get_int (structure, "height", &height);
+
+            filter->width=width;
+            filter->height=height;
+            filter->currentImage = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
+
+            ret = gst_pad_set_caps (otherpad, caps);
+
+            break;
+        };
+        default:
+            ret = gst_pad_event_default (pad, parent, event);
+            break;
+    }
+
+    return ret;
 }
 
 
@@ -345,17 +351,26 @@ gst_motion_detector_rate_timeout (GstMotionDetector *filter)
 
 
 static GstFlowReturn
-gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
+gst_motion_detector_chain (GstPad *pad,
+                            GstObject *parent,
+                            GstBuffer *buf)
 {
   GstMotionDetector *filter = GST_MOTION_DETECTOR (GST_OBJECT_PARENT (pad));
 
   /*filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);*/
-  filter->currentImage->imageData = (char *) GST_BUFFER_DATA (buf);
+  GstMapInfo info;
+  gst_buffer_map (buf, &info, GST_MAP_READWRITE);
+  
+  filter->currentImage->imageData = (char *) info.data;
+  
 
   filter->currentImage = gst_motion_detector_process_image (filter, filter->currentImage);
 
-  if (filter->draw_motion)
-    gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
+  if (filter->draw_motion) {
+    //gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
+  }
+
+  gst_buffer_unmap (buf, &info);
 
   if (!filter->rate_inhibit)
     {
@@ -402,15 +417,6 @@ gst_motion_detector_chain (GstPad * pad, GstBuffer * buf)
 
   return gst_pad_push (filter->srcpad, buf);
 }
-
-
-static GstBuffer *
-gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img)
-{
-  gst_buffer_set_data(buf, (guint8 *)img->imageData, img->imageSize);
-  return buf;
-}
-
 
 static IplImage *
 gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
