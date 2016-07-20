@@ -349,6 +349,10 @@ gst_motion_detector_rate_timeout (GstMotionDetector *filter)
   return FALSE;
 }
 
+static void
+free_iplimg(IplImage *img) {
+  cvReleaseImage (&img);
+}
 
 static GstFlowReturn
 gst_motion_detector_chain (GstPad *pad,
@@ -360,11 +364,10 @@ gst_motion_detector_chain (GstPad *pad,
   /*filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);*/
   GstMapInfo info;
   gst_buffer_map (buf, &info, GST_MAP_READWRITE);
-  
-  filter->currentImage->imageData = (char *) info.data;
-  
 
-  filter->currentImage = gst_motion_detector_process_image (filter, filter->currentImage);
+  filter->currentImage->imageData = (char *) info.data;
+
+  IplImage *gray = gst_motion_detector_process_image (filter, filter->currentImage);
 
   if (filter->draw_motion) {
     //gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
@@ -415,7 +418,13 @@ gst_motion_detector_chain (GstPad *pad,
       gst_object_unref (bus);
     }
 
-  return gst_pad_push (filter->srcpad, buf);
+  GstBuffer *new_buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, gray->imageData,
+                                                   gray->imageSize, 0,
+                                                   gray->imageSize,
+                                                   gray,
+                                                   (GDestroyNotify)free_iplimg);
+
+  return gst_pad_push (filter->srcpad, new_buf);
 }
 
 static IplImage *
@@ -477,20 +486,19 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
     }
     if (filter->draw_motion)
     {
-      cvRectangle (src, cvPoint (bind_rect.x, bind_rect.y),
+      cvRectangle (gr, cvPoint (bind_rect.x, bind_rect.y),
         cvPoint (bind_rect.x + bind_rect.width,
           bind_rect.y + bind_rect.height),
-        CV_RGB (255, 0, 0), 1, 8, 0);
+                   CV_RGB (255,0,0), 1, 8, 0);
     }
   }
   cvReleaseMemStorage(&store);
   cvReleaseImage (&tmp);
   cvReleaseImage (&diff);
-  cvReleaseImage (&gr);
 
   filter->num_blobs = num_blobs;
 
-  return src;
+  return gr;
 }
 
 
