@@ -56,14 +56,14 @@ enum
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw-rgb,bpp=24,depth=24,endianess=4321")
+    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24,endianess=4321")
     );
 
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw-rgb,bpp=24,depth=24,endianess=4321")
+    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24,endianess=4321")
     );
 
 
@@ -513,7 +513,7 @@ motiondetector_init (GstPlugin * motiondetector)
 GST_PLUGIN_DEFINE (
     GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    "motiondetector",
+    motiondetector,
     "Detects motion in video streams",
     motiondetector_init,
     VERSION,
