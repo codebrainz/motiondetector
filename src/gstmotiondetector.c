@@ -56,14 +56,14 @@ enum
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24,endianess=4321")
+    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24")
     );
 
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24,endianess=4321")
+    GST_STATIC_CAPS ("video/x-raw,bpp=8,depth=8,format=GRAY8")
     );
 
 
@@ -311,9 +311,9 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
 
             GstMotionDetector *filter;
             GstPad *otherpad;
-            gint width, height;
+            gint width, height, fps0, fps1;
             GstStructure *structure;
-            GstCaps *caps;
+            GstCaps *caps, *out_caps;
 
             gst_event_parse_caps (event, &caps);
 
@@ -324,12 +324,22 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
             structure = gst_caps_get_structure (caps, 0);
             gst_structure_get_int (structure, "width", &width);
             gst_structure_get_int (structure, "height", &height);
+            gst_structure_get_fraction (structure, "framerate", &fps0, &fps1);
 
             filter->width=width;
             filter->height=height;
             filter->currentImage = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
 
-            ret = gst_pad_set_caps (otherpad, caps);
+            out_caps = gst_caps_new_simple("video/x-raw", 
+               "format", G_TYPE_STRING, "GRAY8",
+               "framerate", GST_TYPE_FRACTION, fps0, fps1,
+               "width", G_TYPE_INT, width,
+               "height", G_TYPE_INT, height,
+               "bpp", G_TYPE_INT, 8,
+               "depth", G_TYPE_INT, 8,
+               NULL);
+        
+            ret = gst_pad_set_caps (otherpad, out_caps);
 
             break;
         };
@@ -354,6 +364,16 @@ free_iplimg(IplImage *img) {
   cvReleaseImage (&img);
 }
 
+
+/*
+static GstBuffer *
+gst_motion_detector_buffer_set_from_ipl_image (GstBuffer *buf, IplImage *img)
+{
+  gst_buffer_set_data(buf, (guint8 *)img->imageData, img->imageSize);
+  return buf;
+}
+*/
+
 static GstFlowReturn
 gst_motion_detector_chain (GstPad *pad,
                             GstObject *parent,
@@ -363,15 +383,18 @@ gst_motion_detector_chain (GstPad *pad,
 
   /*filter->currentImage = gst_motion_detector_gst_buffer_to_ipl_image (buf, filter);*/
   GstMapInfo info;
-  gst_buffer_map (buf, &info, GST_MAP_READWRITE);
+  gst_buffer_map (buf, &info, GST_MAP_READ);
 
   filter->currentImage->imageData = (char *) info.data;
 
-  IplImage *gray = gst_motion_detector_process_image (filter, filter->currentImage);
+  IplImage* gray = cvCreateImage (cvSize(filter->currentImage->width, filter->currentImage->height), IPL_DEPTH_8U, 1);
+  cvCvtColor (filter->currentImage, gray, CV_RGB2GRAY);
+  
+  gst_motion_detector_process_image (filter, gray);
 
-  if (filter->draw_motion) {
+  //if (filter->draw_motion) {
     //gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
-  }
+  //}
 
   gst_buffer_unmap (buf, &info);
 
@@ -418,7 +441,8 @@ gst_motion_detector_chain (GstPad *pad,
       gst_object_unref (bus);
     }
 
-  GstBuffer *new_buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, gray->imageData,
+    gst_buffer_unref(buf);
+  GstBuffer *new_buf = gst_buffer_new_wrapped_full(0, gray->imageData,
                                                    gray->imageSize, 0,
                                                    gray->imageSize,
                                                    gray,
@@ -431,27 +455,24 @@ static IplImage *
 gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
 {
   gint num_blobs = 0;
-  IplImage *diff, *tmp, *gr;
+  IplImage *tmp, *gr;
   CvMemStorage *store = cvCreateMemStorage (0);
   CvSeq *contour = NULL;
   CvRect bind_rect = cvRect (0, 0, 0, 0);
 
-  if (!filter->run_avg)
-    {
-      filter->run_avg = cvCreateImage (cvGetSize (src), IPL_DEPTH_32F, 3);
+  if (!filter->run_avg) {
+      filter->run_avg = cvCreateImage (cvGetSize (src), IPL_DEPTH_32F, 1);
       cvConvertScale (src, filter->run_avg, 1.0, 0.0);
-    }
-  else
+  } else {
     cvRunningAvg(src, filter->run_avg, filter->avg_weight, NULL);
+  }
 
-  tmp = cvCreateImage (cvGetSize (src), IPL_DEPTH_8U, 3);
+
+  tmp = cvCreateImage (cvGetSize (src), IPL_DEPTH_8U, 1);
   cvConvertScale (filter->run_avg, tmp, 1.0, 0.0);
 
-  diff = cvCreateImage (cvGetSize (src), IPL_DEPTH_8U, 3);
-  cvAbsDiff (src, tmp, diff);
-
   gr = cvCreateImage (cvGetSize (src), IPL_DEPTH_8U, 1);
-  cvCvtColor (diff, gr, CV_RGB2GRAY);
+  cvAbsDiff (src, tmp, gr);
 
   cvThreshold (gr, gr, filter->threshold, 255, CV_THRESH_BINARY);
   cvDilate (gr, gr, 0, filter->dilate_iterations);
@@ -459,7 +480,6 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
 
   cvFindContours (gr, store, &contour, sizeof (CvContour),
     CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, cvPoint (0, 0));
-
   for (; contour != NULL; contour = contour->h_next)
   {
     bind_rect = cvBoundingRect (contour, 0);
@@ -486,7 +506,7 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
     }
     if (filter->draw_motion)
     {
-      cvRectangle (gr, cvPoint (bind_rect.x, bind_rect.y),
+      cvRectangle (src, cvPoint (bind_rect.x, bind_rect.y),
         cvPoint (bind_rect.x + bind_rect.width,
           bind_rect.y + bind_rect.height),
                    CV_RGB (255,0,0), 1, 8, 0);
@@ -494,11 +514,10 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
   }
   cvReleaseMemStorage(&store);
   cvReleaseImage (&tmp);
-  cvReleaseImage (&diff);
 
   filter->num_blobs = num_blobs;
 
-  return gr;
+  return src;
 }
 
 
