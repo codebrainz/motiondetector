@@ -56,7 +56,7 @@ enum
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24")
+    GST_STATIC_CAPS ("video/x-raw,bpp=24,depth=24,format=RGB")
     );
 
 
@@ -309,27 +309,26 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
     switch (GST_EVENT_TYPE (event)) {
         case GST_EVENT_CAPS: {
 
-            GstMotionDetector *filter;
-            GstPad *otherpad;
+            GstMotionDetector *filter = GST_MOTION_DETECTOR (parent);
+            //GstPad *otherpad;
             gint width, height, fps0, fps1;
             GstStructure *structure;
             GstCaps *caps, *out_caps;
 
             gst_event_parse_caps (event, &caps);
 
-            filter = GST_MOTION_DETECTOR (gst_pad_get_parent (pad));
-            otherpad = (pad == filter->srcpad) ? filter->sinkpad : filter->srcpad;
-            gst_object_unref (filter);
+            //otherpad = (pad == filter->srcpad) ? filter->sinkpad : filter->srcpad;
 
             structure = gst_caps_get_structure (caps, 0);
             gst_structure_get_int (structure, "width", &width);
             gst_structure_get_int (structure, "height", &height);
             gst_structure_get_fraction (structure, "framerate", &fps0, &fps1);
-
+            
             filter->width=width;
             filter->height=height;
-            filter->currentImage = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 3);
+            filter->currentImage = cvCreateImageHeader(cvSize(width, height), IPL_DEPTH_8U, 3);
 
+  
             out_caps = gst_caps_new_simple("video/x-raw", 
                "format", G_TYPE_STRING, "GRAY8",
                "framerate", GST_TYPE_FRACTION, fps0, fps1,
@@ -339,7 +338,7 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
                "depth", G_TYPE_INT, 8,
                NULL);
         
-            ret = gst_pad_set_caps (otherpad, out_caps);
+            ret = gst_pad_set_caps (/*otherpad*/filter->srcpad, out_caps);
 
             break;
         };
@@ -389,12 +388,8 @@ gst_motion_detector_chain (GstPad *pad,
 
   IplImage* gray = cvCreateImage (cvSize(filter->currentImage->width, filter->currentImage->height), IPL_DEPTH_8U, 1);
   cvCvtColor (filter->currentImage, gray, CV_RGB2GRAY);
-  
+    
   gst_motion_detector_process_image (filter, gray);
-
-  //if (filter->draw_motion) {
-    //gst_motion_detector_buffer_set_from_ipl_image (buf, filter->currentImage);
-  //}
 
   gst_buffer_unmap (buf, &info);
 
@@ -442,13 +437,13 @@ gst_motion_detector_chain (GstPad *pad,
     }
 
     gst_buffer_unref(buf);
-  GstBuffer *new_buf = gst_buffer_new_wrapped_full(0, gray->imageData,
+    GstBuffer *new_buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, gray->imageData,
                                                    gray->imageSize, 0,
                                                    gray->imageSize,
                                                    gray,
                                                    (GDestroyNotify)free_iplimg);
 
-  return gst_pad_push (filter->srcpad, new_buf);
+    return gst_pad_push (filter->srcpad, new_buf);
 }
 
 static IplImage *
