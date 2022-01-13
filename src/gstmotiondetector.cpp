@@ -10,7 +10,7 @@
 #include <gst/gst.h>
 #include <opencv2/imgproc/imgproc_c.h>
 
-#include "gstmotiondetector.h"
+#include "gstmotiondetector.hpp"
 
 
 GST_DEBUG_CATEGORY (gst_motion_detector_debug);
@@ -67,6 +67,7 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     );
 
 
+#define gst_motion_detector_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstMotionDetector, gst_motion_detector, GST_TYPE_ELEMENT,
                          GST_DEBUG_CATEGORY_INIT(gst_motion_detector_debug, "gstmotiondetector", 0,
                                                  "debug category for gstmotiondetector element"));
@@ -99,7 +100,7 @@ gst_motion_detector_class_init (GstMotionDetectorClass * klass)
       gst_static_pad_template_get (&src_factory));
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&sink_factory));
-  
+
 
   gobject_class = (GObjectClass *) klass;
 
@@ -115,42 +116,42 @@ gst_motion_detector_class_init (GstMotionDetectorClass * klass)
   g_object_class_install_property (gobject_class, PROP_POST_MESSAGES,
     g_param_spec_boolean ("post-messages", "PostMessages",
       "Whether or not to post messages on the bus", DEFAULT_POST_MESSAGES,
-      G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_DRAW_MOTION,
     g_param_spec_boolean ("draw-motion", "DrawMotion",
       "Whether or not to draw areas where motion was detected.", DEFAULT_DRAW_MOTION,
-      G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_AVG_WEIGHT,
     g_param_spec_double ("avg-weight", "AvgWeight",
       "Weight new frames are given when added to the running average",
-      0.0, 1.0, DEFAULT_AVG_WEIGHT, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0.0, 1.0, DEFAULT_AVG_WEIGHT, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_THRESHOLD,
     g_param_spec_uint ("threshold", "Threshold",
       "The threshold level used when converting to a binary image",
-      0, 255, DEFAULT_THRESHOLD, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, 255, DEFAULT_THRESHOLD, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_DILATE_ITERATIONS,
     g_param_spec_uint ("dilate-iterations", "DilateIterations",
       "Number of times the binary image is dilated",
-      0, 255, DEFAULT_DILATE_ITERATIONS, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, 255, DEFAULT_DILATE_ITERATIONS, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_ERODE_ITERATIONS,
     g_param_spec_uint ("erode-iterations", "ErodeIterations",
       "Number of times the binary image is eroded",
-      0, 255, DEFAULT_ERODE_ITERATIONS, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, 255, DEFAULT_ERODE_ITERATIONS, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_MINIMUM_BLOB_SIZE,
     g_param_spec_uint ("minimum-blob-size", "MinimumBlobSize",
       "Minimum height or width of blob to be considered",
-      0, 255, DEFAULT_MIN_BLOB_SIZE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, 255, DEFAULT_MIN_BLOB_SIZE, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_MAXIMUM_BLOB_SIZE,
     g_param_spec_uint ("maximum-blob-size", "MaximumBlobSize",
       "Maximum height or width of blob to be considered",
-      0, 255, DEFAULT_MAX_BLOB_SIZE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, 255, DEFAULT_MAX_BLOB_SIZE, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 
   g_object_class_install_property (gobject_class, PROP_NUM_BLOBS,
     g_param_spec_uint ("num-blobs", "NumBlobs",
@@ -160,7 +161,7 @@ gst_motion_detector_class_init (GstMotionDetectorClass * klass)
   g_object_class_install_property (gobject_class, PROP_RATE_LIMIT,
     g_param_spec_uint ("rate-limit", "RateLimit",
       "Number of milliseconds before allowing another detection",
-      0, G_MAXUINT, DEFAULT_RATE_LIMIT,  G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+      0, G_MAXUINT, DEFAULT_RATE_LIMIT,  (GParamFlags) (G_PARAM_READWRITE | G_PARAM_CONSTRUCT)));
 }
 
 
@@ -170,7 +171,7 @@ gst_motion_detector_init (GstMotionDetector * filter)
   filter->sinkpad = gst_pad_new_from_static_template (&sink_factory, "sink");
   gst_pad_set_chain_function (filter->sinkpad,
                               GST_DEBUG_FUNCPTR(gst_motion_detector_chain));
-  gst_pad_set_event_function (filter->sinkpad, 
+  gst_pad_set_event_function (filter->sinkpad,
                               GST_DEBUG_FUNCPTR(gst_motion_detector_event));
 
   filter->srcpad = gst_pad_new_from_static_template (&src_factory, "src");
@@ -198,12 +199,7 @@ static void
 gst_motion_detector_finalize (GObject *obj)
 {
   GstMotionDetector *filter;
-  GstMotionDetectorClass *klass;
-  GstElementClass *parent_class;
-
   filter = GST_MOTION_DETECTOR (obj);
-  klass = G_TYPE_INSTANCE_GET_CLASS (filter, GST_TYPE_MOTION_DETECTOR, GstMotionDetectorClass);
-  parent_class = g_type_class_peek_parent (klass);
 
   if (filter->run_avg)
     cvReleaseImage (&(filter->run_avg));
@@ -323,13 +319,13 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
             gst_structure_get_int (structure, "width", &width);
             gst_structure_get_int (structure, "height", &height);
             gst_structure_get_fraction (structure, "framerate", &fps0, &fps1);
-            
+
             filter->width=width;
             filter->height=height;
             filter->currentImage = cvCreateImageHeader(cvSize(width, height), IPL_DEPTH_8U, 3);
 
-  
-            out_caps = gst_caps_new_simple("video/x-raw", 
+
+            out_caps = gst_caps_new_simple("video/x-raw",
                "format", G_TYPE_STRING, "GRAY8",
                "framerate", GST_TYPE_FRACTION, fps0, fps1,
                "width", G_TYPE_INT, width,
@@ -337,7 +333,7 @@ gst_motion_detector_event(GstPad *pad, GstObject * parent, GstEvent * event)
                "bpp", G_TYPE_INT, 8,
                "depth", G_TYPE_INT, 8,
                NULL);
-        
+
             ret = gst_pad_set_caps (/*otherpad*/filter->srcpad, out_caps);
 
             break;
@@ -388,7 +384,7 @@ gst_motion_detector_chain (GstPad *pad,
 
   IplImage* gray = cvCreateImage (cvSize(filter->currentImage->width, filter->currentImage->height), IPL_DEPTH_8U, 1);
   cvCvtColor (filter->currentImage, gray, CV_RGB2GRAY);
-    
+
   gst_motion_detector_process_image (filter, gray);
 
   gst_buffer_unmap (buf, &info);
@@ -479,10 +475,10 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
   {
     bind_rect = cvBoundingRect (contour, 0);
 
-    if (bind_rect.width < filter->min_blob_size ||
-      bind_rect.height < filter->min_blob_size ||
-      bind_rect.width > filter->max_blob_size ||
-      bind_rect.height > filter->max_blob_size)
+    if (bind_rect.width < (gint) filter->min_blob_size ||
+      bind_rect.height < (gint) filter->min_blob_size ||
+      bind_rect.width > (gint) filter->max_blob_size ||
+      bind_rect.height > (gint) filter->max_blob_size)
     {
       continue;
     }
@@ -504,7 +500,7 @@ gst_motion_detector_process_image (GstMotionDetector *filter, IplImage *src)
       cvRectangle (src, cvPoint (bind_rect.x, bind_rect.y),
         cvPoint (bind_rect.x + bind_rect.width,
           bind_rect.y + bind_rect.height),
-                   CV_RGB (255,0,0), 1, 8, 0);
+        {255,0,0}, 1, 8, 0);
     }
   }
   cvReleaseMemStorage(&store);
